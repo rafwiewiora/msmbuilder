@@ -194,13 +194,17 @@ class _CountsMSMMixin(object):
 
         #step 2. Get the ergodic cutoff
         ergodic_cutoff = self._parse_ergodic_cutoff()
+        if type(self.active_set) is list:
+            active_set = [mapping[x] for x in self.active_set]
+        else:
+            active_set = self.active_set
         # if sliding window, we are gonna have  a float cutoff
         if ergodic_cutoff > 0:
             # step 2. restrict the counts to the maximal strongly ergodic
             # subgraph
             self.countsmat_, mapping2, self.percent_retained_ = \
                 _strongly_connected_subgraph(raw_counts, ergodic_cutoff,
-                                             self.verbose)
+                                             self.verbose, active_set)
             self.mapping_ = _dict_compose(mapping, mapping2)
         else:
             # no ergodic trimming.
@@ -414,7 +418,7 @@ def _normalize_eigensystem(u, lv, rv):
     return u, lv, rv
 
 
-def _strongly_connected_subgraph(counts, weight=1, verbose=True):
+def _strongly_connected_subgraph(counts, weight=1, verbose=True, active_set=None):
     """Trim a transition count matrix down to its maximal
     strongly ergodic subgraph.
 
@@ -472,6 +476,11 @@ def _strongly_connected_subgraph(counts, weight=1, verbose=True):
     if n_components == n_states_input and counts[np.ix_(keys, keys)] == 0:
         # if we have a completely disconnected graph with no self-transitions
         return np.zeros((0, 0)), {}, percent_retained
+        
+    # HACK to force a certain active_set for scoring - note percent_retained
+    # will be WRONG
+    if type(active_set) is list:
+        keys = np.array(active_set)
 
     # values are the "output" state that these guys are mapped to
     values = np.arange(len(keys))
@@ -479,7 +488,7 @@ def _strongly_connected_subgraph(counts, weight=1, verbose=True):
     n_states_output = len(mapping)
 
     trimmed_counts = np.zeros((n_states_output, n_states_output),
-                              dtype=counts.dtype)
+                              dtype=counts.dtype)                          
     trimmed_counts[np.ix_(values, values)] = counts[np.ix_(keys, keys)]
     return trimmed_counts, mapping, percent_retained
 

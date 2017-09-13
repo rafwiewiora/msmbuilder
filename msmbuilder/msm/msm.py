@@ -111,7 +111,7 @@ class MarkovStateModel(BaseEstimator, _MappingTransformMixin,
 
     def __init__(self, lag_time=1, n_timescales=None, reversible_type='mle',
                  ergodic_cutoff='on', prior_counts=0, sliding_window=True,
-                 verbose=True):
+                 verbose=True, active_set=None):
         self.reversible_type = reversible_type
         self.lag_time = lag_time
         self.n_timescales = n_timescales
@@ -119,6 +119,7 @@ class MarkovStateModel(BaseEstimator, _MappingTransformMixin,
         self.sliding_window = sliding_window
         self.verbose = verbose
         self.ergodic_cutoff = ergodic_cutoff
+        self.active_set = active_set
 
         # Keep track of whether to recalculate eigensystem
         self._is_dirty = True
@@ -157,6 +158,9 @@ class MarkovStateModel(BaseEstimator, _MappingTransformMixin,
         NaN or None.
         """
         self._build_counts(sequences)
+        
+        # HACK to have dtrajs for model re-fitting on .score when active_set is 'gmrq'
+        self.dtrajs = sequences
 
         # use a dict like a switch statement: dispatch to different
         # transition matrix estimators depending on the value of
@@ -424,20 +428,53 @@ Timescales:
         m2 = self.__class__(**self.get_params())
         m2.fit(sequences)
 
+        m_train = None
+        m_test = None
+        
         if self.mapping_ != m2.mapping_:
-            V = self._map_eigenvectors(V, m2.mapping_)
-            # we need to map this model's eigenvectors
-            # into the m2 space
+            if self.active_set == 'gmrq':
+                active_set = list(set(self.state_labels_).intersection(set(m2.state_labels_)))
+                if not len(active_set) == 0:
+                    params = self.get_params()
+                    params['active_set'] = active_set
+                    m_train = self.__class__(**params)
+                    m_train.fit(self.dtrajs)
+                    m_test = self.__class__(**params)
+                    m_test.fit(sequences)
+                else:
+                    raise Exception('active_set was set to gmrq but the intersection of test-MSM and train-MSM active sets is empty')
+            else:
+                V = self._map_eigenvectors(V, m2.mapping_)
+                # we need to map this model's eigenvectors
+                # into the m2 space
 
-        # How well do they diagonalize S and C, which are
-        # computed from the new test data?
-        S = np.diag(m2.populations_)
-        C = S.dot(m2.transmat_)
-
-        try:
-            trace = np.trace(V.T.dot(C.dot(V)).dot(np.linalg.inv(V.T.dot(S.dot(V)))))
-        except np.linalg.LinAlgError:
-            trace = np.nan
+        if m_train is None and m_test is None:
+            # How well do they diagonalize S and C, which are
+            # computed from the new test data?
+            S = np.diag(m2.populations_)
+            C = S.dot(m2.transmat_)
+            
+            if len(self.timescales_) == self.n_timescales and len(m2.timescales_) == m2.n_timescales and self.state_labels_ == m2.state_labels_:
+                try:
+                    trace = np.trace(V.T.dot(C.dot(V)).dot(np.linalg.inv(V.T.dot(S.dot(V)))))
+                except np.linalg.LinAlgError:
+                    trace = np.nan
+            else:
+                trace = np.nan
+        else:
+            # How well do they diagonalize S and C, which are
+            # computed from the new test data?
+            V = m_train.right_eigenvectors_
+            S = np.diag(m_test.populations_)
+            C = S.dot(m_test.transmat_)
+            
+            if len(m_train.timescales_) == m_train.n_timescales and len(m_test.timescales_) == m_test.n_timescales and m_train.state_labels_ == m_test.state_labels_:
+                try:
+                    trace = np.trace(V.T.dot(C.dot(V)).dot(np.linalg.inv(V.T.dot(S.dot(V)))))
+                except np.linalg.LinAlgError:
+                    trace = np.nan
+            else:
+                trace = np.nan        
 
         return trace
 
